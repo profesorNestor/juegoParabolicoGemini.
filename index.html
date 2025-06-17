@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <title>Parabolic Strike Challenge</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Bangers&family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
@@ -160,8 +160,6 @@
             border-color: #ff9800;
         }
         #feedbackModal h2, #hintModal h2, #levelUpModal h2, #helpModal h2 { color: #ff9800; }
-        #targetInfoModal .modal-content { max-width: 300px; border-color: #2196F3; padding: 20px; }
-        #targetInfoModal h2 { color: #2196F3; font-size: 2rem; }
     </style>
 </head>
 <body>
@@ -174,6 +172,7 @@
             <div class="stat">🎯 Puntos: <span id="score">0</span></div>
             <div class="stat">✔️ Progreso: <span id="progress">0/5</span></div>
             <div class="stat">⭐ Nota: <span id="grade">0.0</span></div>
+            <div class="stat">📍 Blanco (X,Y): <span id="targetCoords">-, -</span></div>
         </div>
 
         <!-- Game Canvas -->
@@ -207,7 +206,6 @@
     <!-- Modals -->
     <div id="questionModal" class="modal"><div class="modal-content"><h2 id="questionTitle">¡Pregunta de Física!</h2><p id="questionText" class="text-lg mb-4"></p><div id="optionsContainer"></div></div></div>
     <div id="feedbackModal" class="modal"><div class="modal-content"><h2 id="feedbackTitle"></h2><p id="feedbackText" class="text-lg mb-4"></p><button id="nextButton" class="game-button">Continuar</button></div></div>
-    <div id="targetInfoModal" class="modal"><div class="modal-content"><h2>Coordenadas del Blanco</h2><p id="targetCoordsText" class="text-lg mb-4"></p><button id="closeTargetInfo" class="game-button" style="background-color: #2196F3;">Cerrar</button></div></div>
     <div id="hintModal" class="modal"><div class="modal-content"><h2>💎 ¡Pista de Física! 💎</h2><p id="hintText" class="text-lg mb-4"></p><button id="closeHint" class="game-button">¡Entendido!</button></div></div>
     <div id="levelUpModal" class="modal"><div class="modal-content"><h2 id="levelUpTitle"></h2><p id="levelUpText" class="text-lg mb-4"></p><button id="nextLevelButton" class="game-button">¡Siguiente Nivel!</button></div></div>
     <div id="helpModal" class="modal"><div class="modal-content"><h2>Cómo Jugar</h2><div style="text-align: left; margin-bottom: 1rem; font-size: 0.9rem;"><p><strong>Objetivo:</strong> Golpea el blanco con el proyectil y responde correctamente la pregunta de física para avanzar de nivel.</p><br><p><strong>Controles:</strong><br>• Usa los deslizadores para ajustar la <strong>Velocidad</strong> y el <strong>Ángulo</strong>.<br>• Presiona <strong>¡Fuego!</strong> para disparar.<br>• <strong>Arrastre/Panning (PC):</strong> Mantén presionado el botón del ratón y arrastra para mover la vista.<br>• <strong>Arrastre/Panning (Móvil):</strong> Desliza un dedo por la pantalla para mover la vista.</p><br><p><strong>Puntuación:</strong><br>• Acierto al blanco: +100 puntos.<br>• Respuesta correcta: +50 puntos.<br>• Fallar el tiro: -25 puntos.<br>• Golpear una 💣: -50 puntos y pierdes una vida.<br>• Golpear una 💎: ¡Obtienes una pista de física!</p></div><button id="closeHelp" class="game-button">¡Entendido!</button></div></div>
@@ -231,9 +229,10 @@
         // Game objects
         let projectile = null, target = {}, cannon = {}, fallingObjects = [];
         
-        // Panning and interaction
+        // Panning and interaction state
         let panOffsetX = 0, panOffsetY = 0, isPanning = false;
-        let panStart = { x: 0, y: 0 }, hasPanned = false;
+        let panStart = { x: 0, y: 0 };
+        const CLICK_THRESHOLD = 10; // Max pixels to move for it to be a click
 
         // UI Elements
         const levelSpan = document.getElementById('level'), livesSpan = document.getElementById('lives'),
@@ -243,13 +242,15 @@
               angleValueSpan = document.getElementById('angleValue'), levelSelect = document.getElementById('levelSelect'),
               fireButton = document.getElementById('fireButton'), pauseButton = document.getElementById('pauseButton'),
               resetButton = document.getElementById('resetButton'), helpButton = document.getElementById('helpButton'),
+              targetCoordsSpan = document.getElementById('targetCoords'),
               modals = { question: document.getElementById('questionModal'), feedback: document.getElementById('feedbackModal'),
-                         targetInfo: document.getElementById('targetInfoModal'), hint: document.getElementById('hintModal'),
-                         levelUp: document.getElementById('levelUpModal'), help: document.getElementById('helpModal') };
+                         hint: document.getElementById('hintModal'), levelUp: document.getElementById('levelUpModal'), 
+                         help: document.getElementById('helpModal') };
 
         function resizeCanvas() {
             canvas.width = window.innerWidth;
             canvas.height = document.querySelector('.game-container').clientHeight - document.querySelector('.stats-bar').offsetHeight - document.querySelector('.controls-bar').offsetHeight;
+            draw(); // Redraw after resize
         }
         
         function setupLevel(level, resetAll = false) {
@@ -284,11 +285,22 @@
 
         function placeNewTarget() {
             const origin = { x: 50, y: canvas.height - 20 };
+            const safeWidth = canvas.width - origin.x - 50;
+            const safeHeight = origin.y - 100;
             target = {
-                x: origin.x + 150 + Math.random() * (canvas.width * 1.5), // Allow off-screen targets
-                y: origin.y - 100 - Math.random() * (origin.y - 150),
-                radius: 20 + Math.random() * 20
+                x: origin.x + 100 + Math.random() * (safeWidth - 100),
+                y: origin.y - 50 - Math.random() * (safeHeight - 50),
+                radius: 20 + Math.random() * 15
             };
+            updateTargetCoordsStat();
+        }
+
+        function updateTargetCoordsStat() {
+            const origin = { x: 50, y: canvas.height - 20 };
+            const pixelsPerMeter = 3;
+            const realX = (target.x - origin.x) / pixelsPerMeter;
+            const realY = (origin.y - target.y) / pixelsPerMeter;
+            targetCoordsSpan.textContent = `${realX.toFixed(1)}, ${realY.toFixed(1)}`;
         }
 
         function updateStats() {
@@ -318,51 +330,52 @@
         }
 
         function update(dt) {
-            if (!projectile) return;
-            const pixelsPerMeter = 3;
-            projectile.vy += g * dt * pixelsPerMeter;
-            projectile.x += projectile.vx * dt;
-            projectile.y += projectile.vy * dt;
-            projectile.path.push({x: projectile.x, y: projectile.y});
-            if(projectile.path.length > 200) projectile.path.shift();
+            if (projectile) {
+                const pixelsPerMeter = 3;
+                projectile.vy += g * dt * pixelsPerMeter;
+                projectile.x += projectile.vx * dt;
+                projectile.y += projectile.vy * dt;
+                projectile.path.push({x: projectile.x, y: projectile.y});
+                if(projectile.path.length > 200) projectile.path.shift();
 
-            const worldProjectileX = projectile.x + panOffsetX;
-            const worldProjectileY = projectile.y + panOffsetY;
-            const dx = worldProjectileX - target.x;
-            const dy = worldProjectileY - target.y;
+                const worldProjectileX = projectile.x + panOffsetX;
+                const worldProjectileY = projectile.y + panOffsetY;
+                const dx = worldProjectileX - target.x;
+                const dy = worldProjectileY - target.y;
 
-            if (Math.sqrt(dx * dx + dy * dy) < projectile.radius + target.radius) {
-                score += 100;
-                projectile = null;
-                showQuestion();
-                return;
-            }
+                if (Math.hypot(dx, dy) < projectile.radius + target.radius) {
+                    score += 100;
+                    projectile = null;
+                    showQuestion();
+                    return;
+                }
 
-            if (worldProjectileY > canvas.height - 20 || worldProjectileX > canvas.width || worldProjectileX < 0) {
-                projectile = null;
-                lives--;
-                score = Math.max(0, score - 25);
-                updateStats();
+                if (worldProjectileY > canvas.height - 20) {
+                    projectile = null;
+                    lives--;
+                    score = Math.max(0, score - 25);
+                    updateStats();
+                }
             }
         }
         
         function updateFallingObjects(dt) {
             if(Math.random() < 0.015 && !isPaused) {
-                fallingObjects.push({ x: Math.random() * (canvas.width + 400) - panOffsetX, y: -20 - panOffsetY, type: Math.random() < 0.3 ? 'bomb' : 'gem', speed: 2 + Math.random() * 3});
+                fallingObjects.push({ x: Math.random() * canvas.width, y: -20, type: Math.random() < 0.3 ? 'bomb' : 'gem', speed: 2 + Math.random() * 3});
             }
             for(let i = fallingObjects.length - 1; i >= 0; i--) {
                 let obj = fallingObjects[i];
                 obj.y += obj.speed;
                 if(projectile) {
-                     const dx = (projectile.x + panOffsetX) - (obj.x + panOffsetX); 
-                     const dy = (projectile.y + panOffsetY) - (obj.y + panOffsetY);
-                     if (Math.sqrt(dx * dx + dy * dy) < projectile.radius + 20) {
+                     const dx = (projectile.x) - (obj.x); 
+                     const dy = (projectile.y) - (obj.y);
+                     if (Math.hypot(dx, dy) < projectile.radius + 20) {
                         if (obj.type === 'gem') showHint();
                         else { lives--; score = Math.max(0, score - 50); updateStats(); }
                         fallingObjects.splice(i, 1);
                      }
                 }
-                if((obj.y + panOffsetY) > canvas.height + 20) fallingObjects.splice(i, 1);
+                if((obj.y) > canvas.height + 20) fallingObjects.splice(i, 1);
             }
         }
         
@@ -370,29 +383,31 @@
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             ctx.save();
             ctx.translate(panOffsetX, panOffsetY);
-            drawGridAndAxes();
-            ctx.fillStyle = '#4CAF50'; ctx.fillRect(-panOffsetX, canvas.height - 20 - panOffsetY, canvas.width, 20);
             
+            drawGridAndAxes();
+            
+            ctx.fillStyle = '#4CAF50'; 
+            ctx.fillRect(-panOffsetX, canvas.height - 20, canvas.width / ctx.getTransform().a, 20);
+
             ctx.save(); ctx.translate(cannon.x, cannon.y); ctx.rotate(-angle * Math.PI / 180);
             ctx.fillStyle = "#37474F"; ctx.fillRect(0, -15, 80, 30);
             ctx.beginPath(); ctx.arc(0, 0, 25, 0, Math.PI * 2); ctx.fill(); ctx.restore();
 
-            ctx.beginPath(); ctx.arc(target.x - panOffsetX, target.y - panOffsetY, target.radius, 0, 2 * Math.PI); ctx.fillStyle = 'red'; ctx.fill();
-            ctx.beginPath(); ctx.arc(target.x - panOffsetX, target.y - panOffsetY, target.radius * 0.6, 0, 2 * Math.PI); ctx.fillStyle = 'white'; ctx.fill();
-            ctx.beginPath(); ctx.arc(target.x - panOffsetX, target.y - panOffsetY, target.radius * 0.2, 0, 2 * Math.PI); ctx.fillStyle = 'red'; ctx.fill();
+            ctx.beginPath(); ctx.arc(target.x, target.y, target.radius, 0, 2 * Math.PI); ctx.fillStyle = 'red'; ctx.fill();
+            ctx.beginPath(); ctx.arc(target.x, target.y, target.radius * 0.6, 0, 2 * Math.PI); ctx.fillStyle = 'white'; ctx.fill();
+            ctx.beginPath(); ctx.arc(target.x, target.y, target.radius * 0.2, 0, 2 * Math.PI); ctx.fillStyle = 'red'; ctx.fill();
 
             if (projectile) {
                 ctx.strokeStyle = 'rgba(0,0,0,0.5)'; ctx.lineWidth = 3; ctx.beginPath();
-                if(projectile.path.length > 0) {
-                    ctx.moveTo(projectile.path[0].x, projectile.path[0].y);
-                    for(let i = 1; i < projectile.path.length; i++) ctx.lineTo(projectile.path[i].x, projectile.path[i].y);
-                }
+                ctx.moveTo(projectile.path[0].x, projectile.path[0].y);
+                for(let i = 1; i < projectile.path.length; i++) ctx.lineTo(projectile.path[i].x, projectile.path[i].y);
                 ctx.stroke();
                 ctx.beginPath(); ctx.arc(projectile.x, projectile.y, projectile.radius, 0, Math.PI * 2); ctx.fillStyle = 'black'; ctx.fill();
             }
             
             ctx.font = '30px serif';
             for(const obj of fallingObjects) ctx.fillText(obj.type === 'bomb' ? '💣' : '💎', obj.x, obj.y);
+            
             ctx.restore();
         }
         
@@ -400,18 +415,20 @@
             const originX = 50, originY = canvas.height - 20; const pixelsPerMeter = 3; const gridSpacing = 20;
             ctx.save();
             ctx.strokeStyle = "rgba(0, 0, 0, 0.2)"; ctx.fillStyle = "#333"; ctx.font = "12px Inter"; ctx.lineWidth = 0.5;
-            for (let i = 1; (originX + i * gridSpacing * pixelsPerMeter) < canvas.width - panOffsetX; i++) {
+            for (let i = 1; (originX + i * gridSpacing * pixelsPerMeter + panOffsetX) < canvas.width + 200; i++) {
+                 if (originX + i * gridSpacing * pixelsPerMeter + panOffsetX < 0) continue;
                 const xPos = originX + i * gridSpacing * pixelsPerMeter;
-                ctx.beginPath(); ctx.moveTo(xPos, -panOffsetY); ctx.lineTo(xPos, originY); ctx.stroke();
+                ctx.beginPath(); ctx.moveTo(xPos, -panOffsetY); ctx.lineTo(xPos, canvas.height - panOffsetY); ctx.stroke();
                 ctx.textAlign = "center"; ctx.fillText(`${i * gridSpacing}m`, xPos, originY + 15);
             }
-            for (let i = 1; (i * gridSpacing * pixelsPerMeter) < canvas.height - panOffsetY; i++) {
+            for (let i = 1; (i * gridSpacing * pixelsPerMeter) < canvas.height - panOffsetY + 200; i++) {
+                if(originY - i * gridSpacing * pixelsPerMeter + panOffsetY > canvas.height) continue;
                 const yPos = originY - i * gridSpacing * pixelsPerMeter;
                 ctx.beginPath(); ctx.moveTo(-panOffsetX, yPos); ctx.lineTo(canvas.width - panOffsetX, yPos); ctx.stroke();
                 ctx.textAlign = "right"; ctx.textBaseline = "middle"; ctx.fillText(`${i * gridSpacing}m`, originX - 8, yPos);
             }
             ctx.strokeStyle = "#000"; ctx.lineWidth = 1.5;
-            ctx.beginPath(); ctx.moveTo(originX, -panOffsetY); ctx.lineTo(originX, originY); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(originX, -panOffsetY); ctx.lineTo(originX, canvas.height - panOffsetY); ctx.stroke();
             ctx.beginPath(); ctx.moveTo(-panOffsetX, originY); ctx.lineTo(canvas.width - panOffsetX, originY); ctx.stroke();
             ctx.fillText("0", originX - 10, originY + 15);
             ctx.restore();
@@ -421,129 +438,29 @@
         function gameLoop(timestamp) {
             window.gameLoopId = requestAnimationFrame(gameLoop);
             if(isPaused || gameOver) return;
-            const dt = (timestamp - lastTime) / 1000;
+            const dt = (timestamp - lastTime) / 1000 || 0;
             lastTime = timestamp;
             if (dt > 0.1) return;
-            update(dt || 0); updateFallingObjects(dt || 0); draw();
+            update(dt); updateFallingObjects(dt); draw();
         }
         
-        function showHint() {
-            isPaused = true;
-            const hints = ["El ángulo de 45° da el mayor alcance horizontal.", "La velocidad horizontal (Vx) es constante.", "En la altura máxima, la velocidad vertical (Vy) es cero.", "Ángulos complementarios (ej. 30° y 60°) dan el mismo alcance.", "La gravedad solo afecta el movimiento vertical."];
-            modals.hint.querySelector('#hintText').textContent = hints[Math.floor(Math.random() * hints.length)];
-            modals.hint.style.display = 'flex';
-        }
-
-        function showQuestion() { /* ... full implementation in next block ... */ }
-        function checkAnswer(selected, correct) { /* ... full implementation in next block ... */ }
-        function showLevelUpModal(nextLevel) { /* ... full implementation in next block ... */ }
-        function goToNextLevel() { /* ... full implementation in next block ... */ }
-        function showFeedback(title, text) { /* ... full implementation in next block ... */ }
-        function hideAndResume() { /* ... full implementation in next block ... */ }
-        function handleInteractionStart(e) { /* ... full implementation in next block ... */ }
-        function handleInteractionMove(e) { /* ... full implementation in next block ... */ }
-        function handleInteractionEnd(e) { /* ... full implementation in next block ... */ }
-        
-        // Refactored functions for brevity in this view
         const getInteractionCoords = (e) => e.touches ? { x: e.touches[0].clientX, y: e.touches[0].clientY } : { x: e.clientX, y: e.clientY };
-        showQuestion = () => {
-            isPaused = true;
-            const angleRad = angle * Math.PI / 180, v0x = velocity * Math.cos(angleRad), v0y = velocity * Math.sin(angleRad),
-                  timeToPeak = v0y / g, maxHeight = (v0y * v0y) / (2 * g), totalTime = 2 * timeToPeak, range = v0x * totalTime,
-                  t_rand = Math.random() * totalTime;
-            if (questionTypesAvailable.length === 0) fillQuestionTypes();
-            const qType = questionTypesAvailable.splice(Math.floor(Math.random() * questionTypesAvailable.length), 1)[0];
-            let qData;
-            switch(qType) {
-                case 'maxHeight': qData = {q: `¿Cuál es la altura máxima (Ymax) alcanzada?`, correct: maxHeight, unit: "m"}; break;
-                case 'range': qData = {q: `¿Cuál es el alcance horizontal (Xmax)?`, correct: range, unit: "m"}; break;
-                case 'totalTime': qData = {q: `¿Cuánto tiempo total permanece el proyectil en el aire?`, correct: totalTime, unit: "s"}; break;
-                case 'timeToPeak': qData = {q: `¿En qué tiempo el proyectil alcanza su altura máxima?`, correct: timeToPeak, unit: "s"}; break;
-                case 'vx_at_t': qData = {q: `¿Cuál es la velocidad horizontal (Vx) en t=${t_rand.toFixed(1)}s?`, correct: v0x, unit: "m/s"}; break;
-                case 'vy_at_t': qData = {q: `¿Cuál es la velocidad vertical (Vy) en t=${t_rand.toFixed(1)}s?`, correct: v0y - g * t_rand, unit: "m/s"}; break;
-                default: fillQuestionTypes(); showQuestion(); return;
-            }
-            modals.question.querySelector('#questionText').textContent = qData.q;
-            const optionsContainer = modals.question.querySelector('#optionsContainer');
-            optionsContainer.innerHTML = ''; let options = [qData.correct];
-            while (options.length < 4) {
-                const wrongOption = qData.correct * (0.5 + Math.random() * 1.2);
-                if (options.every(opt => Math.abs(opt - wrongOption) > 0.01)) options.push(wrongOption);
-            }
-            options.sort(() => Math.random() - 0.5).forEach(option => {
-                const btn = document.createElement('button');
-                btn.className = 'option-button';
-                btn.textContent = `${option.toFixed(2)} ${qData.unit}`;
-                btn.onclick = () => checkAnswer(option, qData.correct);
-                optionsContainer.appendChild(btn);
-            });
-            modals.question.style.display = 'flex';
-        };
-        checkAnswer = (selected, correct) => {
-            modals.question.style.display = 'none';
-            totalQuestionsAnswered++;
-            const isCorrect = Math.abs(selected - correct) < 0.01;
-            if (isCorrect) {
-                score += 50; correctAnswersThisLevel++; totalCorrectAnswers++;
-                if (correctAnswersThisLevel >= levelConfig[currentLevel].questions) {
-                     if (levelConfig[currentLevel + 1]) showLevelUpModal(currentLevel + 1);
-                     else { gameOver = true; showFeedback("¡FELICIDADES!", "¡Has completado todos los niveles y ganado el juego!"); }
-                } else { showFeedback("¡Correcto!", "¡Excelente! Nuevo blanco en posición."); placeNewTarget(); }
-            } else { lives--; showFeedback("Incorrecto", `La respuesta correcta era ${correct.toFixed(2)}. ¡Intenta golpear el mismo blanco de nuevo!`); }
-            updateStats();
-        };
-        showLevelUpModal = (nextLevel) => {
-            isPaused = true;
-            modals.levelUp.querySelector('#levelUpTitle').textContent = `¡Nivel ${currentLevel} Completado!`;
-            modals.levelUp.querySelector('#levelUpText').textContent = `¡Felicidades! Prepárate para el nivel ${nextLevel}.`;
-            modals.levelUp.style.display = 'flex';
-        };
-        goToNextLevel = () => { setupLevel(currentLevel + 1); placeNewTarget(); hideAndResume(); };
-        showFeedback = (title, text) => {
-            isPaused = true;
-            modals.feedback.querySelector('#feedbackTitle').textContent = title;
-            modals.feedback.querySelector('#feedbackText').textContent = text;
-            modals.feedback.style.display = 'flex';
-        };
-        hideAndResume = () => {
-            Object.values(modals).forEach(modal => modal.style.display = 'none');
-            if (!gameOver) { isPaused = false; lastTime = performance.now(); }
-        };
-        handleInteractionStart = (e) => {
-            if (isPaused) return;
-            e.preventDefault();
-            const coords = getInteractionCoords(e);
-            panStart = { x: coords.x - panOffsetX, y: coords.y - panOffsetY };
-            isPanning = true; hasPanned = false;
-        };
-        handleInteractionMove = (e) => {
-            if (!isPanning || isPaused) return;
-            e.preventDefault();
-            const coords = getInteractionCoords(e);
-            panOffsetX = coords.x - panStart.x;
-            panOffsetY = coords.y - panStart.y;
-            hasPanned = true;
-            draw(); // Redraw on pan
-        };
-        handleInteractionEnd = (e) => {
-            isPanning = false;
-            if (hasPanned) return; // If it was a pan, don't treat it as a click
-            e.preventDefault();
-            const rect = canvas.getBoundingClientRect();
-            const clickCoords = e.changedTouches ? {x: e.changedTouches[0].clientX - rect.left, y: e.changedTouches[0].clientY - rect.top} : {x: e.clientX - rect.left, y: e.clientY - rect.top};
-            const dx = clickCoords.x - (target.x - panOffsetX);
-            const dy = clickCoords.y - (target.y - panOffsetY);
+        
+        // --- MODAL AND LOGIC FUNCTIONS ---
+        function showHint() { isPaused = true; const hints = ["El ángulo de 45° da el mayor alcance horizontal.", "La velocidad horizontal (Vx) es constante.", "En la altura máxima, la velocidad vertical (Vy) es cero.", "Ángulos complementarios (ej. 30° y 60°) dan el mismo alcance.", "La gravedad solo afecta el movimiento vertical."]; modals.hint.querySelector('#hintText').textContent = hints[Math.floor(Math.random() * hints.length)]; modals.hint.style.display = 'flex'; }
+        function showQuestion() { isPaused = true; const angleRad = angle * Math.PI / 180, v0x = velocity * Math.cos(angleRad), v0y = velocity * Math.sin(angleRad), timeToPeak = v0y / g, maxHeight = (v0y * v0y) / (2 * g), totalTime = 2 * timeToPeak, range = v0x * totalTime, t_rand = Math.random() * totalTime; if (questionTypesAvailable.length === 0) fillQuestionTypes(); const qType = questionTypesAvailable.splice(Math.floor(Math.random() * questionTypesAvailable.length), 1)[0]; let qData; switch(qType) { case 'maxHeight': qData = {q: `¿Cuál es la altura máxima (Ymax) alcanzada?`, correct: maxHeight, unit: "m"}; break; case 'range': qData = {q: `¿Cuál es el alcance horizontal (Xmax)?`, correct: range, unit: "m"}; break; case 'totalTime': qData = {q: `¿Cuánto tiempo total permanece el proyectil en el aire?`, correct: totalTime, unit: "s"}; break; case 'timeToPeak': qData = {q: `¿En qué tiempo el proyectil alcanza su altura máxima?`, correct: timeToPeak, unit: "s"}; break; case 'vx_at_t': qData = {q: `¿Cuál es la velocidad horizontal (Vx) en t=${t_rand.toFixed(1)}s?`, correct: v0x, unit: "m/s"}; break; case 'vy_at_t': qData = {q: `¿Cuál es la velocidad vertical (Vy) en t=${t_rand.toFixed(1)}s?`, correct: v0y - g * t_rand, unit: "m/s"}; break; default: fillQuestionTypes(); showQuestion(); return; } modals.question.querySelector('#questionText').textContent = qData.q; const optionsContainer = modals.question.querySelector('#optionsContainer'); optionsContainer.innerHTML = ''; let options = [qData.correct]; while (options.length < 4) { const wrongOption = qData.correct * (0.5 + Math.random() * 1.2); if (options.every(opt => Math.abs(opt - wrongOption) > 0.01)) options.push(wrongOption); } options.sort(() => Math.random() - 0.5).forEach(option => { const btn = document.createElement('button'); btn.className = 'option-button'; btn.textContent = `${option.toFixed(2)} ${qData.unit}`; btn.onclick = () => checkAnswer(option, qData.correct); optionsContainer.appendChild(btn); }); modals.question.style.display = 'flex'; }
+        function checkAnswer(selected, correct) { modals.question.style.display = 'none'; totalQuestionsAnswered++; const isCorrect = Math.abs(selected - correct) < 0.01; if (isCorrect) { score += 50; correctAnswersThisLevel++; totalCorrectAnswers++; if (correctAnswersThisLevel >= levelConfig[currentLevel].questions) { if (levelConfig[currentLevel + 1]) showLevelUpModal(currentLevel + 1); else { gameOver = true; showFeedback("¡FELICIDADES!", "¡Has completado todos los niveles y ganado el juego!"); } } else { showFeedback("¡Correcto!", "¡Excelente! Nuevo blanco en posición."); placeNewTarget(); } } else { lives--; showFeedback("Incorrecto", `La respuesta correcta era ${correct.toFixed(2)}. ¡Intenta golpear el mismo blanco de nuevo!`); } updateStats(); }
+        function showLevelUpModal(nextLevel) { isPaused = true; modals.levelUp.querySelector('#levelUpTitle').textContent = `¡Nivel ${currentLevel} Completado!`; modals.levelUp.querySelector('#levelUpText').textContent = `¡Felicidades! Prepárate para el nivel ${nextLevel}.`; modals.levelUp.style.display = 'flex'; }
+        function goToNextLevel() { setupLevel(currentLevel + 1); placeNewTarget(); hideAndResume(); }
+        function showFeedback(title, text) { isPaused = true; modals.feedback.querySelector('#feedbackTitle').textContent = title; modals.feedback.querySelector('#feedbackText').textContent = text; modals.feedback.style.display = 'flex'; }
+        function hideAndResume() { Object.values(modals).forEach(modal => modal.style.display = 'none'); if (!gameOver) { isPaused = false; lastTime = performance.now(); } }
+        
+        // --- INTERACTION HANDLERS ---
+        function handleInteractionStart(e) { if (isPaused) return; e.preventDefault(); panStart = getInteractionCoords(e); isPanning = true; }
+        function handleInteractionMove(e) { if (!isPanning || isPaused) return; e.preventDefault(); const currentPos = getInteractionCoords(e); panOffsetX += currentPos.x - panStart.x; panOffsetY += currentPos.y - panStart.y; panStart = currentPos; updateTargetCoordsStat(); draw(); }
+        function handleInteractionEnd(e) { if (!isPanning) return; isPanning = false; e.preventDefault(); }
 
-            if (Math.sqrt(dx * dx + dy * dy) < target.radius) {
-                const origin = { x: 50, y: canvas.height - 20 }; const pixelsPerMeter = 3;
-                const realX = (target.x - origin.x) / pixelsPerMeter;
-                const realY = (origin.y - target.y) / pixelsPerMeter;
-                modals.targetInfo.querySelector('#targetCoordsText').innerHTML = `<strong>X:</strong> ${realX.toFixed(1)} m<br><strong>Y:</strong> ${realY.toFixed(1)} m`;
-                modals.targetInfo.style.display = 'flex'; isPaused = true;
-            }
-        };
-
-        // Event Listeners
+        // --- EVENT LISTENERS ---
         velocitySlider.addEventListener('input', e => { velocity = parseFloat(e.target.value); velocityValueSpan.textContent = velocity; });
         angleSlider.addEventListener('input', e => { angle = parseFloat(e.target.value); angleValueSpan.textContent = angle; });
         levelSelect.addEventListener('change', setupGame);
@@ -552,12 +469,10 @@
         resetButton.addEventListener('click', setupGame);
         helpButton.addEventListener('click', () => { isPaused = true; modals.help.style.display = 'flex'; });
         modals.feedback.querySelector('#nextButton').addEventListener('click', hideAndResume);
-        modals.targetInfo.querySelector('#closeTargetInfo').addEventListener('click', hideAndResume);
         modals.hint.querySelector('#closeHint').addEventListener('click', hideAndResume);
         modals.levelUp.querySelector('#nextLevelButton').addEventListener('click', goToNextLevel);
         modals.help.querySelector('#closeHelp').addEventListener('click', hideAndResume);
         
-        // Panning listeners
         canvas.addEventListener('mousedown', handleInteractionStart);
         canvas.addEventListener('mousemove', handleInteractionMove);
         canvas.addEventListener('mouseup', handleInteractionEnd);
@@ -566,7 +481,7 @@
         canvas.addEventListener('touchmove', handleInteractionMove, { passive: false });
         canvas.addEventListener('touchend', handleInteractionEnd);
         
-        window.addEventListener('resize', setupGame);
+        window.addEventListener('resize', resizeCanvas);
         setupGame();
     </script>
 </body>
